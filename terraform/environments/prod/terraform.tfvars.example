@@ -1,0 +1,16 @@
+aws_region   = "us-east-1"
+project_name = "devops-portfolio"
+environment  = "prod"
+
+availability_zones   = ["us-east-1a", "us-east-1b", "us-east-1c"]
+vpc_cidr             = "10.1.0.0/16"
+public_subnet_cidrs  = ["10.1.0.0/24", "10.1.1.0/24", "10.1.2.0/24"]
+private_subnet_cidrs = ["10.1.10.0/24", "10.1.11.0/24", "10.1.12.0/24"]
+
+task_cpu      = 512
+task_memory   = 1024
+desired_count = 4
+
+branch_name             = "main"
+use_codecommit          = true
+deployment_config_name  = "CodeDeployDefault.ECSCanary10Percent5Minutes"

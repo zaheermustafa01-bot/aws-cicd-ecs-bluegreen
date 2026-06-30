@@ -1,0 +1,83 @@
+version: 0.2
+
+env:
+  variables:
+    IMAGE_TAG: "build"
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REPO_URI"
+      - COMMIT_HASH=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-8)
+      - IMAGE_TAG="${COMMIT_HASH:-latest}-${CODEBUILD_BUILD_NUMBER}"
+      - echo "Resolved image tag: $IMAGE_TAG"
+
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - docker build -t "$ECR_REPO_URI:$IMAGE_TAG" -f app/Dockerfile app/
+      - docker tag "$ECR_REPO_URI:$IMAGE_TAG" "$ECR_REPO_URI:latest"
+
+  post_build:
+    commands:
+      - echo "Pushing image to ECR..."
+      - docker push "$ECR_REPO_URI:$IMAGE_TAG"
+      - docker push "$ECR_REPO_URI:latest"
+      - echo "Generating taskdef.json and appspec.yaml for CodeDeploy..."
+      # NOTE: TASK_EXECUTION_ROLE_ARN and TASK_ROLE_ARN are injected as
+      # CodeBuild environment variables (set on the aws_codebuild_project
+      # resource — see terraform/modules/codepipeline/main.tf) because,
+      # unlike the container image, CodeDeploy's ECS deploy action does
+      # NOT template IAM role ARNs. The image URI is also resolved here
+      # directly (rather than via the <IMAGE1_NAME> + Image1ArtifactName
+      # substitution mechanism) since CodeBuild already knows the exact
+      # tag it just pushed — one less moving part in the pipeline.
+      - |
+        cat > taskdef.json << EOF
+        {
+          "family": "$TASK_FAMILY",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": ["FARGATE"],
+          "cpu": "$TASK_CPU",
+          "memory": "$TASK_MEMORY",
+          "executionRoleArn": "$TASK_EXECUTION_ROLE_ARN",
+          "taskRoleArn": "$TASK_ROLE_ARN",
+          "containerDefinitions": [
+            {
+              "name": "app",
+              "image": "$ECR_REPO_URI:$IMAGE_TAG",
+              "essential": true,
+              "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+              "environment": [{ "name": "APP_VERSION", "value": "$IMAGE_TAG" }],
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "$LOG_GROUP_NAME",
+                  "awslogs-region": "$AWS_DEFAULT_REGION",
+                  "awslogs-stream-prefix": "ecs"
+                }
+              }
+            }
+          ]
+        }
+        EOF
+      - |
+        cat > appspec.yaml << EOF
+        version: 0.0
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: <TASK_DEFINITION>
+                LoadBalancerInfo:
+                  ContainerName: "app"
+                  ContainerPort: 8080
+        EOF
+      - echo "Build complete. Image pushed as $ECR_REPO_URI:$IMAGE_TAG"
+
+artifacts:
+  files:
+    - taskdef.json
+    - appspec.yaml
+  discard-paths: yes

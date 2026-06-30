@@ -1,0 +1,20 @@
+version: 0.2
+# Invoked by CodeDeploy's "AfterAllowTestTraffic" lifecycle hook (via a Lambda
+# or a dedicated CodeBuild action) to validate the green deployment on the
+# test listener port (8443) before traffic is fully shifted in production.
+
+phases:
+  build:
+    commands:
+      - echo "Running smoke tests against green deployment..."
+      - |
+        for i in $(seq 1 5); do
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS_NAME:8443/health")
+          if [ "$STATUS" -eq 200 ]; then
+            echo "Smoke test passed (attempt $i): /health returned 200"
+            exit 0
+          fi
+          echo "Attempt $i failed (status $STATUS), retrying in 10s..."
+          sleep 10
+        done
+      - echo "Smoke tests failed after 5 attempts" && exit 1
